@@ -195,7 +195,7 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		}
 	}
 	if e.Ready {
-		if e.Error != nil && age >= c.o.ErrorAge {
+		if e.Error != nil && (c.o.ErrorAge <= 0 || age >= c.o.ErrorAge) {
 			e.SetReady(false)
 			e.Value = nil
 			e.Error = nil

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -389,4 +390,53 @@ func TestClosedGet(t *testing.T) {
 	if err != ErrClosed {
 		t.Errorf("Got unexpected error %v from Get", err)
 	}
+}
+
+func TestGetMeetupCreateRace(t *testing.T) {
+	// This test tries to maximize the likelihood of the read lock to write lock
+	// transition in Cache.Get noticing that the entry has already been created
+	// even though it already transitioned to a write lock.
+	//
+	// By having multiple workers requesting the same key, then changing that
+	// key relatively slowly over time, we should see exactly as many hits as
+	// keys, and we should never deadlock.
+
+	var hits uint64
+	c := NewCache(Options{
+		Get: func(key string) (interface{}, error) {
+			atomic.AddUint64(&hits, 1)
+			return key, nil
+		},
+	})
+	defer c.Close()
+
+	var keyInt uint64 = 1
+
+	done := make(chan struct{})
+	for worker := 0; worker < 5; worker++ {
+		go func() {
+			for i := 0; i < 1000; i++ {
+				for i := 0; i < 10; i++ {
+					c.Get(strconv.FormatUint(atomic.LoadUint64(&keyInt), 10))
+				}
+
+				newKeyInt := atomic.AddUint64(&keyInt, 1)
+				c.Get(strconv.FormatUint(newKeyInt, 10))
+			}
+			done <- struct{}{}
+		}()
+	}
+
+	for worker := 0; worker < 5; worker++ {
+		<-done
+	}
+
+	gotHits := atomic.LoadUint64(&hits)
+	gotKeys := atomic.LoadUint64(&keyInt)
+
+	if gotHits != gotKeys {
+		t.Errorf("made %v keys, but got %v hits", gotKeys, gotHits)
+	}
+
+	t.Logf("key at end was %s", gotKeys)
 }

@@ -173,15 +173,18 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		c.mu.RUnlock()
 		c.mu.Lock()
 		e, ok = c.m[key]
-		if !ok {
+		if ok {
+			c.mu.Unlock()
+			e.mu.Lock()
+		} else {
 			// Still no entry for this key. Create the entry.
 			e = &entry{}
 			e.readyCond = sync.NewCond(&e.mu)
 			e.mu.Lock()
 			c.startFill(key, e)
 			c.m[key] = e
+			c.mu.Unlock()
 		}
-		c.mu.Unlock()
 	}
 
 	age := t.Sub(e.LastUpdate)

@@ -42,7 +42,7 @@ func mustGet(t *testing.T, c *Cache, key string, want interface{}) {
 
 func TestCache(t *testing.T) {
 	hits := 0
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			hits++
 			return key, nil
@@ -74,7 +74,7 @@ func TestExpiry(t *testing.T) {
 	var mu sync.Mutex
 	hits := 0
 
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			mu.Lock()
 			hits++
@@ -114,7 +114,7 @@ func TestExpiry(t *testing.T) {
 func TestExpiryUsesStartTime(t *testing.T) {
 	hits := 0
 
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			advanceTime(time.Second)
 			hits++
@@ -146,7 +146,7 @@ func TestMeetup(t *testing.T) {
 	var mu sync.Mutex
 	hits := 0
 
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			blockGets.Wait(false)
 
@@ -196,7 +196,7 @@ func TestConcurrencyLimit(t *testing.T) {
 	conc := 0
 	maxConc := 0
 
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			mu.Lock()
 			conc++
@@ -247,7 +247,7 @@ func TestCacheDoesntKeepErrors(t *testing.T) {
 	deliberateErr := errors.New("deliberate failure")
 
 	hits := 0
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			hits++
 			return nil, deliberateErr
@@ -287,7 +287,7 @@ func TestRevalidation(t *testing.T) {
 	hits := 0
 	finished := 0
 
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			mu.Lock()
 			hits++
@@ -340,7 +340,7 @@ func TestErrorCaching(t *testing.T) {
 	var mu sync.Mutex
 	hits := 0
 
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			mu.Lock()
 			hits++
@@ -379,7 +379,7 @@ func TestErrorCaching(t *testing.T) {
 }
 
 func TestClosedGet(t *testing.T) {
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			return key, nil
 		},
@@ -408,7 +408,7 @@ func TestGetMeetupCreateRace(t *testing.T) {
 	)
 
 	var hits uint64
-	c := NewCache(Options{
+	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			atomic.AddUint64(&hits, 1)
 			return key, nil

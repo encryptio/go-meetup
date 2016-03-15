@@ -131,8 +131,8 @@ func (e *entry) SetReady(r bool) {
 	e.Ready = r
 }
 
-// NewCache returns a Cache with the given Options.
-func NewCache(o Options) *Cache {
+// New returns a Cache with the given Options.
+func New(o Options) *Cache {
 	c := &Cache{
 		o: o,
 		m: make(map[string]*entry),

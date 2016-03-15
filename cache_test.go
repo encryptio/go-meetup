@@ -376,3 +376,17 @@ func TestErrorCaching(t *testing.T) {
 		t.Errorf("hits = %v", hits)
 	}
 }
+
+func TestClosedGet(t *testing.T) {
+	c := NewCache(Options{
+		Get: func(key string) (interface{}, error) {
+			return key, nil
+		},
+	})
+	c.Close()
+
+	_, err := c.Get("a")
+	if err != ErrClosed {
+		t.Errorf("Got unexpected error %v from Get", err)
+	}
+}

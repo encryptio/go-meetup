@@ -1,4 +1,4 @@
-// package meetup implements a cache with meetup and smart revalidation.
+// Package meetup implements a cache with meetup and smart revalidation.
 //
 // A meetup cache will coalesce concurrent requests for the same item, so that
 // only one request will be done to the backend per entry.
@@ -90,6 +90,7 @@ type Options struct {
 	RevalidateAge time.Duration
 }
 
+// Cache implements a meetup cache.
 type Cache struct {
 	o Options
 
@@ -222,9 +223,8 @@ func (c *Cache) Get(key string) (interface{}, error) {
 
 	if err != nil {
 		return nil, err
-	} else {
-		return value, nil
 	}
+	return value, nil
 }
 
 func (c *Cache) startFill(key string, e *entry) {

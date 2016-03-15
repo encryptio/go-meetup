@@ -115,12 +115,12 @@ type entry struct {
 	// Only set this through SetReady
 	Ready bool
 
+	// Running is true iff a fill is running for this entry
+	Running bool
+
 	// Value and Error are valid iff Ready is true
 	Value interface{}
 	Error error
-
-	// Running is true iff a fill is running for this entry
-	Running bool
 }
 
 // You must hold e.mu when calling SetReady

@@ -401,6 +401,12 @@ func TestGetMeetupCreateRace(t *testing.T) {
 	// key relatively slowly over time, we should see exactly as many hits as
 	// keys, and we should never deadlock.
 
+	const (
+		workers         = 5
+		iterations      = 1000
+		extraGetsPerKey = 2 * workers
+	)
+
 	var hits uint64
 	c := NewCache(Options{
 		Get: func(key string) (interface{}, error) {
@@ -413,10 +419,10 @@ func TestGetMeetupCreateRace(t *testing.T) {
 	var keyInt uint64 = 1
 
 	done := make(chan struct{})
-	for worker := 0; worker < 5; worker++ {
+	for worker := 0; worker < workers; worker++ {
 		go func() {
-			for i := 0; i < 1000; i++ {
-				for i := 0; i < 10; i++ {
+			for i := 0; i < iterations; i++ {
+				for i := 0; i < extraGetsPerKey; i++ {
 					c.Get(strconv.FormatUint(atomic.LoadUint64(&keyInt), 10))
 				}
 
@@ -427,7 +433,7 @@ func TestGetMeetupCreateRace(t *testing.T) {
 		}()
 	}
 
-	for worker := 0; worker < 5; worker++ {
+	for worker := 0; worker < workers; worker++ {
 		<-done
 	}
 
@@ -438,5 +444,9 @@ func TestGetMeetupCreateRace(t *testing.T) {
 		t.Errorf("made %v keys, but got %v hits", gotKeys, gotHits)
 	}
 
-	t.Logf("key at end was %s", gotKeys)
+	if gotKeys != iterations*workers+1 {
+		t.Errorf("created %v keys but wanted %v", gotKeys, iterations*workers+1)
+	}
+
+	t.Logf("key at end was %v", gotKeys)
 }

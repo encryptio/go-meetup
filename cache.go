@@ -166,6 +166,7 @@ func (c *Cache) Get(key string) (interface{}, error) {
 	e, ok := c.m[key]
 	if ok {
 		c.mu.RUnlock()
+		e.mu.Lock()
 	} else {
 		// No entry for this key.
 		c.mu.RUnlock()
@@ -175,13 +176,13 @@ func (c *Cache) Get(key string) (interface{}, error) {
 			// Still no entry for this key. Create the entry.
 			e = &entry{}
 			e.readyCond = sync.NewCond(&e.mu)
-			c.startFill(key, e) // NB: don't need e.mu, no other goroutine can have e yet
+			e.mu.Lock()
+			c.startFill(key, e)
 			c.m[key] = e
 		}
 		c.mu.Unlock()
 	}
 
-	e.mu.Lock()
 	age := t.Sub(e.LastUpdate)
 	if c.o.ExpireAge > 0 && age >= c.o.ExpireAge {
 		// This entry has expired. Clear its value and make sure it's filling.

@@ -271,7 +271,7 @@ func TestCacheDoesntKeepErrors(t *testing.T) {
 	}
 
 	if hits != 2 {
-		t.Errorf("Error was cached")
+		t.Errorf("Hits was %v, not 2", hits)
 	}
 }
 

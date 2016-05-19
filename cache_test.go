@@ -450,3 +450,98 @@ func TestGetMeetupCreateRace(t *testing.T) {
 
 	t.Logf("key at end was %v", gotKeys)
 }
+
+func BenchmarkGetCreateSerial(b *testing.B) {
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			return nil, nil
+		},
+	})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := c.Get(strconv.FormatInt(int64(i), 10))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkGetCreate8Parallel(b *testing.B) {
+	const workers = 8
+
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			return nil, nil
+		},
+	})
+
+	keysPerWorker := b.N / workers
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for r := 0; r < workers; r++ {
+		wg.Add(1)
+		go func(r int) {
+			defer wg.Done()
+			<-start
+			for i := keysPerWorker * r; i < keysPerWorker*(r+1); i++ {
+				_, err := c.Get(strconv.FormatInt(int64(i), 10))
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		}(r)
+	}
+
+	b.ResetTimer()
+	close(start)
+	wg.Wait()
+}
+
+func BenchmarkGetCachedSerial(b *testing.B) {
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			return nil, nil
+		},
+	})
+	c.Get("")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.Get("")
+	}
+}
+
+func BenchmarkGetCached8Parallel(b *testing.B) {
+	const workers = 8
+
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			return nil, nil
+		},
+	})
+
+	c.Get("")
+	keysPerWorker := b.N / workers
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for r := 0; r < workers; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < keysPerWorker; i++ {
+				_, err := c.Get("")
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		}()
+	}
+
+	b.ResetTimer()
+	close(start)
+	wg.Wait()
+}

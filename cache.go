@@ -97,7 +97,7 @@ type Cache struct {
 	concLimitCh chan struct{}
 
 	// mu protects m, but NOT its entries; each entry has its own lock.
-	mu sync.RWMutex
+	mu sync.Mutex
 	m  map[string]*entry
 
 	t tomb.Tomb
@@ -163,28 +163,19 @@ func (c *Cache) Get(key string) (interface{}, error) {
 
 	t := now()
 
-	c.mu.RLock()
+	c.mu.Lock()
 	e, ok := c.m[key]
 	if ok {
-		c.mu.RUnlock()
+		c.mu.Unlock()
 		e.mu.Lock()
 	} else {
-		// No entry for this key.
-		c.mu.RUnlock()
-		c.mu.Lock()
-		e, ok = c.m[key]
-		if ok {
-			c.mu.Unlock()
-			e.mu.Lock()
-		} else {
-			// Still no entry for this key. Create the entry.
-			e = &entry{}
-			e.readyCond = sync.NewCond(&e.mu)
-			e.mu.Lock()
-			c.startFill(key, e)
-			c.m[key] = e
-			c.mu.Unlock()
-		}
+		// No entry for this key. Create the entry.
+		e = &entry{}
+		e.readyCond = sync.NewCond(&e.mu)
+		e.mu.Lock()
+		c.startFill(key, e)
+		c.m[key] = e
+		c.mu.Unlock()
 	}
 
 	age := t.Sub(e.LastUpdate)

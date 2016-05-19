@@ -393,13 +393,10 @@ func TestClosedGet(t *testing.T) {
 }
 
 func TestGetMeetupCreateRace(t *testing.T) {
-	// This test tries to maximize the likelihood of the read lock to write lock
-	// transition in Cache.Get noticing that the entry has already been created
-	// even though it already transitioned to a write lock.
-	//
-	// By having multiple workers requesting the same key, then changing that
-	// key relatively slowly over time, we should see exactly as many hits as
-	// keys, and we should never deadlock.
+	// This test was written to maximize the likelihood of a read lock to write
+	// lock transition in Cache.Get noticing that the entry has already been
+	// created even though it already transitioned to a write lock, but the
+	// Cache logic has changed to use a basic Mutex for better performance.
 
 	const (
 		workers         = 5

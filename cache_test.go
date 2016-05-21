@@ -454,6 +454,7 @@ func BenchmarkGetCreateSerial(b *testing.B) {
 			return nil, nil
 		},
 	})
+	defer c.Close()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -472,6 +473,7 @@ func BenchmarkGetCreate8Parallel(b *testing.B) {
 			return nil, nil
 		},
 	})
+	defer c.Close()
 
 	keysPerWorker := b.N / workers
 
@@ -502,6 +504,7 @@ func BenchmarkGetCachedSerial(b *testing.B) {
 			return nil, nil
 		},
 	})
+	defer c.Close()
 	c.Get("")
 
 	b.ResetTimer()
@@ -518,6 +521,7 @@ func BenchmarkGetCached8Parallel(b *testing.B) {
 			return nil, nil
 		},
 	})
+	defer c.Close()
 
 	c.Get("")
 	keysPerWorker := b.N / workers

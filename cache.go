@@ -98,7 +98,7 @@ type Cache struct {
 
 	// mu protects m, but NOT its entries; each entry has its own lock.
 	mu sync.Mutex
-	m  map[string]*entry
+	m  *tree
 
 	t tomb.Tomb
 }
@@ -135,7 +135,7 @@ func (e *entry) SetReady(r bool) {
 func New(o Options) *Cache {
 	c := &Cache{
 		o: o,
-		m: make(map[string]*entry),
+		m: treeNew(),
 	}
 
 	if o.Concurrency > 0 {
@@ -164,7 +164,7 @@ func (c *Cache) Get(key string) (interface{}, error) {
 	t := now()
 
 	c.mu.Lock()
-	e, ok := c.m[key]
+	e, ok := c.m.Get(key)
 	if ok {
 		c.mu.Unlock()
 		e.mu.Lock()
@@ -174,7 +174,7 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		e.readyCond = sync.NewCond(&e.mu)
 		e.mu.Lock()
 		c.startFill(key, e)
-		c.m[key] = e
+		c.m.Set(key, e)
 		c.mu.Unlock()
 	}
 

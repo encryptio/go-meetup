@@ -448,6 +448,164 @@ func TestGetMeetupCreateRace(t *testing.T) {
 	t.Logf("key at end was %v", gotKeys)
 }
 
+func TestTinyMaxSize(t *testing.T) {
+	var hits uint64
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			atomic.AddUint64(&hits, 1)
+			return nil, nil
+		},
+		MaxSize: 1,
+	})
+	defer c.Close()
+
+	hitsMustBe := func(want uint64) {
+		actual := atomic.LoadUint64(&hits)
+		if actual != want {
+			t.Fatalf("hits = %v, but wanted %v", actual, want)
+		}
+	}
+
+	// We should only be able to cache a single value.
+
+	hitsMustBe(0)
+	c.validateTotalSize()
+	mustGet(t, c, "a", nil)
+	c.validateTotalSize()
+	hitsMustBe(1)
+	mustGet(t, c, "a", nil)
+	c.validateTotalSize()
+	hitsMustBe(1)
+	mustGet(t, c, "b", nil)
+	c.validateTotalSize()
+	hitsMustBe(2)
+	mustGet(t, c, "b", nil)
+	c.validateTotalSize()
+	hitsMustBe(2)
+	mustGet(t, c, "a", nil)
+	c.validateTotalSize()
+	hitsMustBe(3)
+	mustGet(t, c, "b", nil)
+	c.validateTotalSize()
+	hitsMustBe(4)
+}
+
+func TestEvictionKeepsHotKeys(t *testing.T) {
+	var hits uint64
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			atomic.AddUint64(&hits, 1)
+			return nil, nil
+		},
+		MaxSize: 3,
+	})
+	defer c.Close()
+
+	hitsMustBe := func(want uint64) {
+		actual := atomic.LoadUint64(&hits)
+		if actual != want {
+			t.Fatalf("hits = %v, but wanted %v", actual, want)
+		}
+	}
+
+	mustGet(t, c, "hot", nil)
+	hitsMustBe(1)
+
+	for loop := 0; loop < 2; loop++ {
+		for i := 1; i <= 100; i++ {
+			mustGet(t, c, strconv.FormatInt(int64(i), 10), nil)
+			expectedHits := uint64(i + 1 + loop*100)
+			hitsMustBe(expectedHits)
+			mustGet(t, c, "hot", nil)
+			hitsMustBe(expectedHits)
+			c.validateTotalSize()
+		}
+	}
+}
+
+func TestItemSize(t *testing.T) {
+	var hits uint64
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			atomic.AddUint64(&hits, 1)
+			return nil, nil
+		},
+		MaxSize: 4,
+		ItemSize: func(key string, value interface{}) int64 {
+			return 4
+		},
+	})
+	defer c.Close()
+
+	hitsMustBe := func(want uint64) {
+		actual := atomic.LoadUint64(&hits)
+		if actual != want {
+			t.Fatalf("hits = %v, but wanted %v", actual, want)
+		}
+	}
+
+	hitsMustBe(0)
+	c.validateTotalSize()
+	mustGet(t, c, "a", nil)
+	c.validateTotalSize()
+	hitsMustBe(1)
+	mustGet(t, c, "a", nil)
+	c.validateTotalSize()
+	hitsMustBe(1)
+	mustGet(t, c, "b", nil)
+	c.validateTotalSize()
+	hitsMustBe(2)
+	mustGet(t, c, "a", nil)
+	c.validateTotalSize()
+	hitsMustBe(3)
+}
+
+func TestItemSizeTooBig(t *testing.T) {
+	var hits uint64
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			atomic.AddUint64(&hits, 1)
+			return nil, nil
+		},
+		MaxSize: 2,
+		ItemSize: func(key string, value interface{}) int64 {
+			if key == "big" {
+				return 99
+			}
+			return 1
+		},
+	})
+	defer c.Close()
+
+	hitsMustBe := func(want uint64) {
+		actual := atomic.LoadUint64(&hits)
+		if actual != want {
+			t.Fatalf("hits = %v, but wanted %v", actual, want)
+		}
+	}
+
+	hitsMustBe(0)
+	c.validateTotalSize()
+	mustGet(t, c, "a", nil)
+	c.validateTotalSize()
+	hitsMustBe(1)
+	mustGet(t, c, "b", nil)
+	c.validateTotalSize()
+	hitsMustBe(2)
+	mustGet(t, c, "big", nil)
+	c.validateTotalSize()
+	hitsMustBe(3)
+	mustGet(t, c, "big", nil)
+	c.validateTotalSize()
+	hitsMustBe(4)
+	mustGet(t, c, "a", nil)
+	c.validateTotalSize()
+	hitsMustBe(4)
+	mustGet(t, c, "b", nil)
+	c.validateTotalSize()
+	hitsMustBe(4)
+}
+
 func BenchmarkGetCreateSerial(b *testing.B) {
 	c := New(Options{
 		Get: func(key string) (interface{}, error) {
@@ -540,6 +698,58 @@ func BenchmarkGetCached8Parallel(b *testing.B) {
 				}
 			}
 		}()
+	}
+
+	b.ResetTimer()
+	close(start)
+	wg.Wait()
+}
+
+func BenchmarkGetCreateLimitedSizeSerial(b *testing.B) {
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			return nil, nil
+		},
+		MaxSize: 128,
+	})
+	defer c.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := c.Get(strconv.FormatInt(int64(i), 10))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkGetCreateLimitedSize8Parallel(b *testing.B) {
+	const workers = 8
+
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			return nil, nil
+		},
+		MaxSize: 128,
+	})
+	defer c.Close()
+
+	keysPerWorker := b.N / workers
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for r := 0; r < workers; r++ {
+		wg.Add(1)
+		go func(r int) {
+			defer wg.Done()
+			<-start
+			for i := keysPerWorker * r; i < keysPerWorker*(r+1); i++ {
+				_, err := c.Get(strconv.FormatInt(int64(i), 10))
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		}(r)
 	}
 
 	b.ResetTimer()

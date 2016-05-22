@@ -36,6 +36,8 @@ package meetup
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -65,7 +67,7 @@ var (
 type Options struct {
 	// When a key is requested that does not exist in the cache (or needs to be
 	// revalidated) then Get will be called. Get is called concurrently, at most
-	// once concurrently per concurrent key requested.
+	// twice concurrently per concurrent key requested.
 	Get func(key string) (interface{}, error)
 
 	// If greater than zero, only Concurrency Get calls will be done
@@ -88,6 +90,18 @@ type Options struct {
 	//
 	// If zero, revalidation is disabled.
 	RevalidateAge time.Duration
+
+	// If MaxSize is greater than zero, then when Options.Get returns, some of
+	// the values not used most recently will be evicted from the cache until
+	// the total size of all values is underneath MaxSize.
+	//
+	// Currently running Gets do not count towards MaxSize.
+	MaxSize int64
+
+	// ItemSize is called to figure out the size of a value to compare against
+	// MaxSize. If ItemSize is not set or returns a value less than or equal to
+	// zero, the size of a value is 1.
+	ItemSize func(key string, value interface{}) int64
 }
 
 // Cache implements a meetup cache.
@@ -97,8 +111,12 @@ type Cache struct {
 	concLimitCh chan struct{}
 
 	// mu protects m, but NOT its entries; each entry has its own lock.
-	mu sync.Mutex
-	m  *tree
+	// mu also protects evictAt and totalSize.
+	// Any goroutine calling mu.Lock MUST NOT hold any entry.mu locks.
+	mu        sync.Mutex
+	m         *tree
+	evictAt   string
+	totalSize int64
 
 	t tomb.Tomb
 }
@@ -108,19 +126,23 @@ type entry struct {
 	mu        sync.Mutex
 	readyCond *sync.Cond
 
+	Size int64
+
 	LastUpdate time.Time
-
-	Filling bool
-
-	// Only set this through SetReady
-	Ready bool
-
-	// Running is true iff a fill is running for this entry
-	Running bool
 
 	// Value and Error are valid iff Ready is true
 	Value interface{}
 	Error error
+
+	// Filling is true iff a fill is running for this entry
+	Filling bool
+
+	// Only set this through SetReady.
+	Ready bool
+
+	// RecentlyUsed is true iff a Get has hit this key since the last eviction
+	// cycle hit it (or since it was created.)
+	RecentlyUsed bool
 }
 
 // You must hold e.mu when calling SetReady
@@ -168,6 +190,7 @@ func (c *Cache) Get(key string) (interface{}, error) {
 	if ok {
 		c.mu.Unlock()
 		e.mu.Lock()
+		e.RecentlyUsed = true
 	} else {
 		// No entry for this key. Create the entry.
 		e = &entry{}
@@ -242,6 +265,72 @@ func (c *Cache) fill(key string, e *entry) {
 	t := now()
 	value, err := c.o.Get(key)
 
+	if c.o.MaxSize > 0 {
+		e.mu.Lock()
+		oldSize := e.Size
+		newSize := int64(1)
+		if c.o.ItemSize != nil {
+			sz := c.o.ItemSize(key, value)
+			if sz > 0 {
+				newSize = sz
+			}
+		}
+		e.Size = newSize
+		e.mu.Unlock()
+
+		c.mu.Lock()
+
+		if newSize > c.o.MaxSize {
+			// Rather than evict our entire cache and STILL not have room for
+			// this value, we just evict this value immediately, unless it has
+			// changed to a different entry in the meantime.
+			v, _ := c.m.Get(key)
+			if v == e {
+				c.m.Delete(key)
+			}
+		} else {
+			c.totalSize += newSize - oldSize
+
+			if c.totalSize > c.o.MaxSize {
+
+				// TODO: rather than evict items regardless, we can look for
+				// expired values first and evict them since they'll never be
+				// used.
+
+				enum, _ := c.m.Seek(c.evictAt)
+				for c.totalSize > c.o.MaxSize {
+					k, v, err := enum.Next()
+					if err == io.EOF {
+						enum, err = c.m.SeekFirst()
+						if err == io.EOF {
+							// Tree is empty. Shouldn't ever occur, but we can
+							// safely just bail out of the eviction loop.
+							break
+						}
+						continue
+					}
+
+					c.evictAt = k
+
+					v.mu.Lock()
+					if v.RecentlyUsed {
+						v.RecentlyUsed = false
+						v.mu.Unlock()
+						continue
+					}
+
+					if v.Ready {
+						c.m.Delete(k)
+						c.totalSize -= v.Size
+					}
+					v.mu.Unlock()
+				}
+			}
+		}
+
+		c.mu.Unlock()
+	}
+
 	e.mu.Lock()
 	e.LastUpdate = t
 	e.Value = value
@@ -256,4 +345,35 @@ func (c *Cache) fill(key string, e *entry) {
 func (c *Cache) Close() error {
 	c.t.Kill(nil)
 	return c.t.Wait()
+}
+
+func (c *Cache) validateTotalSize() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.o.MaxSize <= 0 {
+		panic("validateTotalSize called when Options.MaxSize is not set (no sizes are being captured)")
+	}
+
+	size := int64(0)
+	enum, err := c.m.SeekFirst()
+	if err != io.EOF {
+		for {
+			_, v, err := enum.Next()
+			if err == io.EOF {
+				break
+			}
+			v.mu.Lock()
+			if !v.Ready {
+				v.mu.Unlock()
+				panic("validateTotalSize called when not all cache entries were ready")
+			}
+			size += v.Size
+			v.mu.Unlock()
+		}
+	}
+
+	if size != c.totalSize {
+		panic(fmt.Sprintf("c.totalSize = %v, but calculated sum = %v", c.totalSize, size))
+	}
 }

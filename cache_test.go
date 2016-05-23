@@ -40,6 +40,13 @@ func mustGet(t *testing.T, c *Cache, key string, want interface{}) {
 	}
 }
 
+func atomicHitCheck(t *testing.T, value *uint64, expect uint64) {
+	actual := atomic.LoadUint64(value)
+	if actual != expect {
+		t.Fatalf("hits = %v, but wanted %v", actual, expect)
+	}
+}
+
 func TestCache(t *testing.T) {
 	hits := 0
 	c := New(Options{
@@ -459,35 +466,34 @@ func TestTinyMaxSize(t *testing.T) {
 	})
 	defer c.Close()
 
-	hitsMustBe := func(want uint64) {
-		actual := atomic.LoadUint64(&hits)
-		if actual != want {
-			t.Fatalf("hits = %v, but wanted %v", actual, want)
-		}
-	}
-
 	// We should only be able to cache a single value.
 
-	hitsMustBe(0)
 	c.validateTotalSize()
+	atomicHitCheck(t, &hits, 0)
+
 	mustGet(t, c, "a", nil)
 	c.validateTotalSize()
-	hitsMustBe(1)
+	atomicHitCheck(t, &hits, 1)
+
 	mustGet(t, c, "a", nil)
 	c.validateTotalSize()
-	hitsMustBe(1)
+	atomicHitCheck(t, &hits, 1)
+
 	mustGet(t, c, "b", nil)
 	c.validateTotalSize()
-	hitsMustBe(2)
+	atomicHitCheck(t, &hits, 2)
+
 	mustGet(t, c, "b", nil)
 	c.validateTotalSize()
-	hitsMustBe(2)
+	atomicHitCheck(t, &hits, 2)
+
 	mustGet(t, c, "a", nil)
 	c.validateTotalSize()
-	hitsMustBe(3)
+	atomicHitCheck(t, &hits, 3)
+
 	mustGet(t, c, "b", nil)
 	c.validateTotalSize()
-	hitsMustBe(4)
+	atomicHitCheck(t, &hits, 4)
 }
 
 func TestEvictionKeepsHotKeys(t *testing.T) {
@@ -501,23 +507,16 @@ func TestEvictionKeepsHotKeys(t *testing.T) {
 	})
 	defer c.Close()
 
-	hitsMustBe := func(want uint64) {
-		actual := atomic.LoadUint64(&hits)
-		if actual != want {
-			t.Fatalf("hits = %v, but wanted %v", actual, want)
-		}
-	}
-
 	mustGet(t, c, "hot", nil)
-	hitsMustBe(1)
+	atomicHitCheck(t, &hits, 1)
 
 	for loop := 0; loop < 2; loop++ {
 		for i := 1; i <= 100; i++ {
 			mustGet(t, c, strconv.FormatInt(int64(i), 10), nil)
 			expectedHits := uint64(i + 1 + loop*100)
-			hitsMustBe(expectedHits)
+			atomicHitCheck(t, &hits, expectedHits)
 			mustGet(t, c, "hot", nil)
-			hitsMustBe(expectedHits)
+			atomicHitCheck(t, &hits, expectedHits)
 			c.validateTotalSize()
 		}
 	}
@@ -537,27 +536,24 @@ func TestItemSize(t *testing.T) {
 	})
 	defer c.Close()
 
-	hitsMustBe := func(want uint64) {
-		actual := atomic.LoadUint64(&hits)
-		if actual != want {
-			t.Fatalf("hits = %v, but wanted %v", actual, want)
-		}
-	}
+	c.validateTotalSize()
+	atomicHitCheck(t, &hits, 0)
 
-	hitsMustBe(0)
-	c.validateTotalSize()
 	mustGet(t, c, "a", nil)
 	c.validateTotalSize()
-	hitsMustBe(1)
+	atomicHitCheck(t, &hits, 1)
+
 	mustGet(t, c, "a", nil)
 	c.validateTotalSize()
-	hitsMustBe(1)
+	atomicHitCheck(t, &hits, 1)
+
 	mustGet(t, c, "b", nil)
 	c.validateTotalSize()
-	hitsMustBe(2)
+	atomicHitCheck(t, &hits, 2)
+
 	mustGet(t, c, "a", nil)
 	c.validateTotalSize()
-	hitsMustBe(3)
+	atomicHitCheck(t, &hits, 3)
 }
 
 func TestItemSizeTooBig(t *testing.T) {
@@ -577,33 +573,32 @@ func TestItemSizeTooBig(t *testing.T) {
 	})
 	defer c.Close()
 
-	hitsMustBe := func(want uint64) {
-		actual := atomic.LoadUint64(&hits)
-		if actual != want {
-			t.Fatalf("hits = %v, but wanted %v", actual, want)
-		}
-	}
+	c.validateTotalSize()
+	atomicHitCheck(t, &hits, 0)
 
-	hitsMustBe(0)
-	c.validateTotalSize()
 	mustGet(t, c, "a", nil)
 	c.validateTotalSize()
-	hitsMustBe(1)
+	atomicHitCheck(t, &hits, 1)
+
 	mustGet(t, c, "b", nil)
 	c.validateTotalSize()
-	hitsMustBe(2)
+	atomicHitCheck(t, &hits, 2)
+
 	mustGet(t, c, "big", nil)
 	c.validateTotalSize()
-	hitsMustBe(3)
+	atomicHitCheck(t, &hits, 3)
+
 	mustGet(t, c, "big", nil)
 	c.validateTotalSize()
-	hitsMustBe(4)
+	atomicHitCheck(t, &hits, 4)
+
 	mustGet(t, c, "a", nil)
 	c.validateTotalSize()
-	hitsMustBe(4)
+	atomicHitCheck(t, &hits, 4)
+
 	mustGet(t, c, "b", nil)
 	c.validateTotalSize()
-	hitsMustBe(4)
+	atomicHitCheck(t, &hits, 4)
 }
 
 func BenchmarkGetCreateSerial(b *testing.B) {

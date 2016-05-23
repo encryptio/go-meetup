@@ -601,6 +601,53 @@ func TestItemSizeTooBig(t *testing.T) {
 	atomicHitCheck(t, &hits, 4)
 }
 
+func TestItemSizeChanges(t *testing.T) {
+	fillComplete = make(chan struct{})
+	defer func() { fillComplete = nil }()
+
+	var hits uint64
+	size := uint64(1)
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			atomic.AddUint64(&hits, 1)
+			return atomic.LoadUint64(&size), nil
+		},
+		MaxSize: 2,
+		ItemSize: func(key string, value interface{}) uint64 {
+			return value.(uint64)
+		},
+		RevalidateAge: time.Second,
+	})
+	defer c.Close()
+
+	c.validateTotalSize()
+	atomicHitCheck(t, &hits, 0)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mustGet(t, c, "a", uint64(1))
+		mustGet(t, c, "b", uint64(1))
+		mustGet(t, c, "a", uint64(1))
+		mustGet(t, c, "b", uint64(1))
+	}()
+	<-fillComplete
+	<-fillComplete
+	<-done
+	c.validateTotalSize()
+	atomicHitCheck(t, &hits, 2)
+
+	advanceTime(time.Second)
+	atomic.StoreUint64(&size, 2)
+
+	mustGet(t, c, "a", uint64(1))
+	<-fillComplete
+	mustGet(t, c, "a", uint64(2))
+
+	c.validateTotalSize()
+	atomicHitCheck(t, &hits, 3)
+}
+
 func BenchmarkGetCreateSerial(b *testing.B) {
 	c := New(Options{
 		Get: func(key string) (interface{}, error) {

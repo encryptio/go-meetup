@@ -68,7 +68,7 @@ var (
 type Options struct {
 	// When a key is requested that does not exist in the cache (or needs to be
 	// revalidated) then Get will be called. Get is called concurrently, at most
-	// twice concurrently per concurrent key requested.
+	// once concurrently per concurrent key requested.
 	Get func(key string) (interface{}, error)
 
 	// If greater than zero, only Concurrency Get calls will be done
@@ -387,8 +387,20 @@ func (c *Cache) fill(key string, e *entry) {
 					}
 
 					if v.Ready {
-						c.m.Delete(k)
 						c.totalSize -= v.Size
+						if v.Filling {
+							// We shouldn't evict keys that are filling by
+							// deleting them from the map; instead, we should
+							// keep them around but remove their data. This
+							// allows future Cache.Gets to meet up with the
+							// existing fill routine.
+							v.Value = nil
+							v.Error = nil
+							v.Size = 0
+							v.SetReady(false)
+						} else {
+							c.m.Delete(k)
+						}
 						atomic.AddUint64(&c.stats.Evictions, 1)
 					}
 					v.mu.Unlock()

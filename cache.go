@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/tomb.v2"
@@ -104,6 +105,48 @@ type Options struct {
 	ItemSize func(key string, value interface{}) uint64
 }
 
+// Stats are returned from Cache.Stats.
+type Stats struct {
+	// The number of times Cache.Get found an item in the cache.
+	Hits uint64
+
+	// The number of times Cache.Get did not find an item in the cache.
+	Misses uint64
+
+	// The number of values evicted from the cache.
+	Evictions uint64
+
+	// The number of times a value was revalidated in-place.
+	Revalidations uint64
+
+	// The number of times a value was found in the cache, but had expired.
+	// NB: This counter is not updated when a value expires, only when it is
+	// found in the cache after it has already expired.
+	Expires uint64
+
+	// The number of errors (err != nil) returned from Options.Get.
+	Errors uint64
+
+	// The current size of the cache.
+	CurrentSize uint64
+
+	// The current number of items in the cache.
+	CurrentCount uint64
+}
+
+func (s *Stats) copyWithAtomics() Stats {
+	s2 := Stats{}
+	s2.Hits = atomic.LoadUint64(&s.Hits)
+	s2.Misses = atomic.LoadUint64(&s.Misses)
+	s2.Evictions = atomic.LoadUint64(&s.Evictions)
+	s2.Revalidations = atomic.LoadUint64(&s.Revalidations)
+	s2.Expires = atomic.LoadUint64(&s.Expires)
+	s2.Errors = atomic.LoadUint64(&s.Errors)
+	s2.CurrentSize = atomic.LoadUint64(&s.CurrentSize)
+	s2.CurrentCount = atomic.LoadUint64(&s.CurrentCount)
+	return s2
+}
+
 // Cache implements a meetup cache.
 type Cache struct {
 	o Options
@@ -117,6 +160,8 @@ type Cache struct {
 	m         *tree
 	evictAt   string
 	totalSize uint64
+
+	stats Stats
 
 	t tomb.Tomb
 }
@@ -191,6 +236,7 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		c.mu.Unlock()
 		e.mu.Lock()
 		e.RecentlyUsed = true
+		atomic.AddUint64(&c.stats.Hits, 1)
 	} else {
 		// No entry for this key. Create the entry.
 		e = &entry{}
@@ -199,11 +245,13 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		c.startFill(key, e)
 		c.m.Set(key, e)
 		c.mu.Unlock()
+		atomic.AddUint64(&c.stats.Misses, 1)
 	}
 
 	age := t.Sub(e.LastUpdate)
 	if c.o.ExpireAge > 0 && age >= c.o.ExpireAge {
 		// This entry has expired. Clear its value and make sure it's filling.
+		atomic.AddUint64(&c.stats.Expires, 1)
 		e.SetReady(false)
 		e.Value = nil
 		e.Error = nil
@@ -220,6 +268,7 @@ func (c *Cache) Get(key string) (interface{}, error) {
 				c.startFill(key, e)
 			}
 		} else if c.o.RevalidateAge > 0 && age >= c.o.RevalidateAge && !e.Filling {
+			atomic.AddUint64(&c.stats.Revalidations, 1)
 			c.startFill(key, e)
 		}
 	}
@@ -244,6 +293,20 @@ func (c *Cache) Get(key string) (interface{}, error) {
 	return value, nil
 }
 
+// Stats retrieves the current stats for the Cache.
+//
+// Each field of the returned Stats object will be some value of the real stat
+// that existed while the Stats function was running; however, each field's
+// value may be taken at a different time, so the fields may not exactly add up.
+func (c *Cache) Stats() Stats {
+	st := c.stats.copyWithAtomics()
+	c.mu.Lock()
+	st.CurrentSize = c.totalSize
+	st.CurrentCount = uint64(c.m.Len())
+	c.mu.Unlock()
+	return st
+}
+
 func (c *Cache) startFill(key string, e *entry) {
 	e.Filling = true
 	c.t.Go(func() error {
@@ -264,6 +327,10 @@ func (c *Cache) fill(key string, e *entry) {
 
 	t := now()
 	value, err := c.o.Get(key)
+
+	if err != nil {
+		atomic.AddUint64(&c.stats.Errors, 1)
+	}
 
 	if c.o.MaxSize > 0 {
 		e.mu.Lock()
@@ -322,6 +389,7 @@ func (c *Cache) fill(key string, e *entry) {
 					if v.Ready {
 						c.m.Delete(k)
 						c.totalSize -= v.Size
+						atomic.AddUint64(&c.stats.Evictions, 1)
 					}
 					v.mu.Unlock()
 				}

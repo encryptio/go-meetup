@@ -531,7 +531,7 @@ func TestItemSize(t *testing.T) {
 			return nil, nil
 		},
 		MaxSize: 4,
-		ItemSize: func(key string, value interface{}) int64 {
+		ItemSize: func(key string, value interface{}) uint64 {
 			return 4
 		},
 	})
@@ -568,7 +568,7 @@ func TestItemSizeTooBig(t *testing.T) {
 			return nil, nil
 		},
 		MaxSize: 2,
-		ItemSize: func(key string, value interface{}) int64 {
+		ItemSize: func(key string, value interface{}) uint64 {
 			if key == "big" {
 				return 99
 			}

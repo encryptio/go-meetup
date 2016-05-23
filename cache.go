@@ -96,12 +96,12 @@ type Options struct {
 	// the total size of all values is underneath MaxSize.
 	//
 	// Currently running Gets do not count towards MaxSize.
-	MaxSize int64
+	MaxSize uint64
 
 	// ItemSize is called to figure out the size of a value to compare against
-	// MaxSize. If ItemSize is not set or returns a value less than or equal to
-	// zero, the size of a value is 1.
-	ItemSize func(key string, value interface{}) int64
+	// MaxSize. If ItemSize is not set or returns a zero, the size of a value is
+	// assumed to be 1.
+	ItemSize func(key string, value interface{}) uint64
 }
 
 // Cache implements a meetup cache.
@@ -116,7 +116,7 @@ type Cache struct {
 	mu        sync.Mutex
 	m         *tree
 	evictAt   string
-	totalSize int64
+	totalSize uint64
 
 	t tomb.Tomb
 }
@@ -126,7 +126,7 @@ type entry struct {
 	mu        sync.Mutex
 	readyCond *sync.Cond
 
-	Size int64
+	Size uint64
 
 	LastUpdate time.Time
 
@@ -268,7 +268,7 @@ func (c *Cache) fill(key string, e *entry) {
 	if c.o.MaxSize > 0 {
 		e.mu.Lock()
 		oldSize := e.Size
-		newSize := int64(1)
+		newSize := uint64(1)
 		if c.o.ItemSize != nil {
 			sz := c.o.ItemSize(key, value)
 			if sz > 0 {
@@ -355,7 +355,7 @@ func (c *Cache) validateTotalSize() {
 		panic("validateTotalSize called when Options.MaxSize is not set (no sizes are being captured)")
 	}
 
-	size := int64(0)
+	size := uint64(0)
 	enum, err := c.m.SeekFirst()
 	if err != io.EOF {
 		for {

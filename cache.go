@@ -39,7 +39,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"gopkg.in/tomb.v2"
@@ -134,30 +133,15 @@ type Stats struct {
 	CurrentCount uint64
 }
 
-func (s *Stats) copyWithAtomics() Stats {
-	s2 := Stats{}
-	s2.Hits = atomic.LoadUint64(&s.Hits)
-	s2.Misses = atomic.LoadUint64(&s.Misses)
-	s2.Evictions = atomic.LoadUint64(&s.Evictions)
-	s2.Revalidations = atomic.LoadUint64(&s.Revalidations)
-	s2.Expires = atomic.LoadUint64(&s.Expires)
-	s2.Errors = atomic.LoadUint64(&s.Errors)
-	s2.CurrentSize = atomic.LoadUint64(&s.CurrentSize)
-	s2.CurrentCount = atomic.LoadUint64(&s.CurrentCount)
-	return s2
-}
-
 // Cache implements a meetup cache.
 type Cache struct {
 	o Options
 
 	concLimitCh chan struct{}
 
-	// mu protects m, but NOT its entries; each entry has its own lock.
-	// mu also protects evictAt and totalSize.
-	// Any goroutine calling mu.Lock MUST NOT hold any entry.mu locks.
+	// mu protects tree, and its entries, evictAt, and totalSize.
 	mu        sync.Mutex
-	m         *tree
+	tree      *tree
 	evictAt   string
 	totalSize uint64
 
@@ -167,9 +151,7 @@ type Cache struct {
 }
 
 type entry struct {
-	// mu protects all fields in the entry
-	mu        sync.Mutex
-	readyCond *sync.Cond
+	ReadyCond *sync.Cond
 
 	Size uint64
 
@@ -190,19 +172,11 @@ type entry struct {
 	RecentlyUsed bool
 }
 
-// You must hold e.mu when calling SetReady
-func (e *entry) SetReady(r bool) {
-	if e.Ready != r {
-		e.readyCond.Broadcast()
-	}
-	e.Ready = r
-}
-
 // New returns a Cache with the given Options.
 func New(o Options) *Cache {
 	c := &Cache{
-		o: o,
-		m: treeNew(),
+		o:    o,
+		tree: treeNew(),
 	}
 
 	if o.Concurrency > 0 {
@@ -218,6 +192,39 @@ func New(o Options) *Cache {
 	return c
 }
 
+func (c *Cache) setEntryValue(key string, e *entry, value interface{}, err error) {
+	e.Value = value
+	e.Error = err
+
+	newSize := uint64(1)
+	if c.o.ItemSize != nil {
+		sz := c.o.ItemSize(key, value)
+		if sz > 0 {
+			newSize = sz
+		}
+	}
+
+	c.totalSize += newSize - e.Size
+
+	e.Size = newSize
+
+	if !e.Ready {
+		e.Ready = true
+		e.ReadyCond.Broadcast()
+	}
+}
+
+func (c *Cache) setEntryCleared(e *entry) {
+	if e.Ready {
+		e.Value = nil
+		e.Error = nil
+		c.totalSize -= e.Size
+		e.Size = 0
+		e.Ready = false
+		e.ReadyCond.Broadcast()
+	}
+}
+
 // Get retrieves an entry's value from the cache, calling Options.Get if needed
 // to fill the cache. If multiple concurrent Get calls occur on the same key,
 // all of them will recieve the return value of a single Options.Get call.
@@ -231,44 +238,31 @@ func (c *Cache) Get(key string) (interface{}, error) {
 	t := now()
 
 	c.mu.Lock()
-	e, ok := c.m.Get(key)
+	e, ok := c.tree.Get(key)
 	if ok {
-		c.mu.Unlock()
-		e.mu.Lock()
 		e.RecentlyUsed = true
-		atomic.AddUint64(&c.stats.Hits, 1)
+		c.stats.Hits++
 	} else {
 		// No entry for this key. Create the entry.
-		e = &entry{}
-		e.readyCond = sync.NewCond(&e.mu)
-		e.mu.Lock()
+		e = &entry{
+			ReadyCond: sync.NewCond(&c.mu),
+		}
 		c.startFill(key, e)
-		c.m.Set(key, e)
-		c.mu.Unlock()
-		atomic.AddUint64(&c.stats.Misses, 1)
+		c.tree.Set(key, e)
+		c.stats.Misses++
 	}
 
-	age := t.Sub(e.LastUpdate)
-	if c.o.ExpireAge > 0 && age >= c.o.ExpireAge {
-		// This entry has expired. Clear its value and make sure it's filling.
-		atomic.AddUint64(&c.stats.Expires, 1)
-		e.SetReady(false)
-		e.Value = nil
-		e.Error = nil
-		if !e.Filling {
-			c.startFill(key, e)
-		}
-	}
 	if e.Ready {
-		if e.Error != nil && (c.o.ErrorAge <= 0 || age >= c.o.ErrorAge) {
-			e.SetReady(false)
-			e.Value = nil
-			e.Error = nil
-			if !e.Filling {
-				c.startFill(key, e)
-			}
-		} else if c.o.RevalidateAge > 0 && age >= c.o.RevalidateAge && !e.Filling {
-			atomic.AddUint64(&c.stats.Revalidations, 1)
+		age := t.Sub(e.LastUpdate)
+		if c.o.ExpireAge > 0 && age >= c.o.ExpireAge {
+			c.stats.Expires++
+			c.setEntryCleared(e)
+			c.startFill(key, e)
+		} else if e.Error != nil && (c.o.ErrorAge <= 0 || age >= c.o.ErrorAge) {
+			c.setEntryCleared(e)
+			c.startFill(key, e)
+		} else if c.o.RevalidateAge > 0 && age >= c.o.RevalidateAge {
+			c.stats.Revalidations++
 			c.startFill(key, e)
 		}
 	}
@@ -279,13 +273,13 @@ func (c *Cache) Get(key string) (interface{}, error) {
 	}
 
 	for !e.Ready {
-		e.readyCond.Wait()
+		e.ReadyCond.Wait()
 	}
 
 	value := e.Value
 	err := e.Error
 
-	e.mu.Unlock()
+	c.mu.Unlock()
 
 	if err != nil {
 		return nil, err
@@ -294,20 +288,18 @@ func (c *Cache) Get(key string) (interface{}, error) {
 }
 
 // Stats retrieves the current stats for the Cache.
-//
-// Each field of the returned Stats object will be some value of the real stat
-// that existed while the Stats function was running; however, each field's
-// value may be taken at a different time, so the fields may not exactly add up.
 func (c *Cache) Stats() Stats {
-	st := c.stats.copyWithAtomics()
 	c.mu.Lock()
-	st.CurrentSize = c.totalSize
-	st.CurrentCount = uint64(c.m.Len())
+	st := c.stats
 	c.mu.Unlock()
 	return st
 }
 
 func (c *Cache) startFill(key string, e *entry) {
+	if e.Filling {
+		return
+	}
+
 	e.Filling = true
 	c.t.Go(func() error {
 		c.fill(key, e)
@@ -316,6 +308,8 @@ func (c *Cache) startFill(key string, e *entry) {
 }
 
 func (c *Cache) fill(key string, e *entry) {
+
+	// Used for the test suite only.
 	if fillComplete != nil {
 		defer func() { fillComplete <- struct{}{} }()
 	}
@@ -328,47 +322,34 @@ func (c *Cache) fill(key string, e *entry) {
 	t := now()
 	value, err := c.o.Get(key)
 
+	c.mu.Lock()
+
 	if err != nil {
-		atomic.AddUint64(&c.stats.Errors, 1)
+		c.stats.Errors++
 	}
 
+	e.LastUpdate = t
+	e.Filling = false
+	c.setEntryValue(key, e, value, err)
+
 	if c.o.MaxSize > 0 {
-		e.mu.Lock()
-		oldSize := e.Size
-		newSize := uint64(1)
-		if c.o.ItemSize != nil {
-			sz := c.o.ItemSize(key, value)
-			if sz > 0 {
-				newSize = sz
-			}
-		}
-		e.Size = newSize
-		e.mu.Unlock()
-
-		c.mu.Lock()
-
-		if newSize > c.o.MaxSize {
+		if e.Size > c.o.MaxSize {
 			// Rather than evict our entire cache and STILL not have room for
-			// this value, we just evict this value immediately, unless it has
-			// changed to a different entry in the meantime.
-			v, _ := c.m.Get(key)
-			if v == e {
-				c.m.Delete(key)
-			}
+			// this value, we just evict this value immediately.
+			c.tree.Delete(key)
+			c.totalSize -= e.Size
 		} else {
-			c.totalSize += newSize - oldSize
-
 			if c.totalSize > c.o.MaxSize {
 
 				// TODO: rather than evict items regardless, we can look for
 				// expired values first and evict them since they'll never be
 				// used.
 
-				enum, _ := c.m.Seek(c.evictAt)
+				enum, _ := c.tree.Seek(c.evictAt)
 				for c.totalSize > c.o.MaxSize {
 					k, v, err := enum.Next()
 					if err == io.EOF {
-						enum, err = c.m.SeekFirst()
+						enum, err = c.tree.SeekFirst()
 						if err == io.EOF {
 							// Tree is empty. Shouldn't ever occur, but we can
 							// safely just bail out of the eviction loop.
@@ -377,47 +358,38 @@ func (c *Cache) fill(key string, e *entry) {
 						continue
 					}
 
-					c.evictAt = k
+					if v == e {
+						// Never attempt to evict ourselves
+						continue
+					}
 
-					v.mu.Lock()
 					if v.RecentlyUsed {
 						v.RecentlyUsed = false
-						v.mu.Unlock()
 						continue
 					}
 
 					if v.Ready {
-						c.totalSize -= v.Size
 						if v.Filling {
 							// We shouldn't evict keys that are filling by
 							// deleting them from the map; instead, we should
 							// keep them around but remove their data. This
 							// allows future Cache.Gets to meet up with the
 							// existing fill routine.
-							v.Value = nil
-							v.Error = nil
-							v.Size = 0
-							v.SetReady(false)
+							c.setEntryCleared(v)
 						} else {
-							c.m.Delete(k)
+							c.tree.Delete(k)
+							c.totalSize -= v.Size
 						}
-						atomic.AddUint64(&c.stats.Evictions, 1)
+						c.stats.Evictions++
 					}
-					v.mu.Unlock()
 				}
+
+				c.evictAt, _, _ = enum.Next()
 			}
 		}
-
-		c.mu.Unlock()
 	}
 
-	e.mu.Lock()
-	e.LastUpdate = t
-	e.Value = value
-	e.Error = err
-	e.Filling = false
-	e.SetReady(true)
-	e.mu.Unlock()
+	c.mu.Unlock()
 }
 
 // Close waits for all running Options.Get calls to finish and makes all future
@@ -436,20 +408,14 @@ func (c *Cache) validateTotalSize() {
 	}
 
 	size := uint64(0)
-	enum, err := c.m.SeekFirst()
+	enum, err := c.tree.SeekFirst()
 	if err != io.EOF {
 		for {
 			_, v, err := enum.Next()
 			if err == io.EOF {
 				break
 			}
-			v.mu.Lock()
-			if !v.Ready {
-				v.mu.Unlock()
-				panic("validateTotalSize called when not all cache entries were ready")
-			}
 			size += v.Size
-			v.mu.Unlock()
 		}
 	}
 

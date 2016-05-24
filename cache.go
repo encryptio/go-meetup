@@ -31,6 +31,9 @@
 //         // Revalidate entries regularly so that we know their mapping points
 //         // to the right place.
 //         RevalidateAge: time.Minute,
+//
+//         // Keep the cache from taking up too much memory.
+//         MaxSize: 10000,
 //     }
 package meetup
 

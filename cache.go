@@ -291,6 +291,8 @@ func (c *Cache) Get(key string) (interface{}, error) {
 func (c *Cache) Stats() Stats {
 	c.mu.Lock()
 	st := c.stats
+	st.CurrentSize = c.totalSize
+	st.CurrentCount = uint64(c.tree.Len())
 	c.mu.Unlock()
 	return st
 }

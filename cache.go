@@ -106,7 +106,7 @@ type Options struct {
 
 // Stats are returned from Cache.Stats.
 type Stats struct {
-	// The number of times Cache.Get found an item in the cache.
+	// The number of times Cache.Get returned cached data.
 	Hits uint64
 
 	// The number of times Cache.Get did not find an item in the cache.
@@ -241,7 +241,6 @@ func (c *Cache) Get(key string) (interface{}, error) {
 	e, ok := c.tree.Get(key)
 	if ok {
 		e.RecentlyUsed = true
-		c.stats.Hits++
 	} else {
 		// No entry for this key. Create the entry.
 		e = &entry{
@@ -264,6 +263,9 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		} else if c.o.RevalidateAge > 0 && age >= c.o.RevalidateAge {
 			c.stats.Revalidations++
 			c.startFill(key, e)
+		}
+		if e.Ready {
+			c.stats.Hits++
 		}
 	}
 

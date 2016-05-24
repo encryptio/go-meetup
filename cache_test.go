@@ -648,6 +648,79 @@ func TestItemSizeChanges(t *testing.T) {
 	atomicHitCheck(t, &hits, 3)
 }
 
+func TestStats(t *testing.T) {
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			if key == "error" {
+				return nil, errors.New("err")
+			}
+			return nil, nil
+		},
+		MaxSize: 4,
+		ItemSize: func(key string, value interface{}) uint64 {
+			return 2
+		},
+		ExpireAge:     time.Second * 3,
+		RevalidateAge: time.Second,
+		ErrorAge:      time.Second * 2,
+	})
+	defer c.Close()
+
+	var expectStats Stats
+	if expectStats != c.Stats() {
+		t.Errorf("Wanted Stats() = %#v, but got %#v", expectStats, c.Stats())
+	}
+
+	c.Get("a")
+	expectStats.Misses++
+	expectStats.CurrentSize = 2
+	expectStats.CurrentCount = 1
+	if expectStats != c.Stats() {
+		t.Errorf("Wanted Stats() = %#v, but got %#v", expectStats, c.Stats())
+	}
+
+	c.Get("a")
+	expectStats.Hits++
+	if expectStats != c.Stats() {
+		t.Errorf("Wanted Stats() = %#v, but got %#v", expectStats, c.Stats())
+	}
+
+	c.Get("error")
+	expectStats.Misses++
+	expectStats.Errors++
+	expectStats.CurrentSize = 4
+	expectStats.CurrentCount = 2
+	if expectStats != c.Stats() {
+		t.Errorf("Wanted Stats() = %#v, but got %#v", expectStats, c.Stats())
+	}
+
+	c.Get("b")
+	expectStats.Misses++
+	expectStats.Evictions++
+	if expectStats != c.Stats() {
+		t.Errorf("Wanted Stats() = %#v, but got %#v", expectStats, c.Stats())
+	}
+
+	advanceTime(time.Second)
+
+	fillComplete = make(chan struct{})
+	go c.Get("b")
+	<-fillComplete
+	fillComplete = nil
+	expectStats.Revalidations++
+	expectStats.Hits++
+	if expectStats != c.Stats() {
+		t.Errorf("Wanted Stats() = %#v, but got %#v", expectStats, c.Stats())
+	}
+
+	advanceTime(time.Second * 4)
+	c.Get("b")
+	expectStats.Expires++
+	if expectStats != c.Stats() {
+		t.Errorf("Wanted Stats() = %#v, but got %#v", expectStats, c.Stats())
+	}
+}
+
 func BenchmarkGetCreateSerial(b *testing.B) {
 	c := New(Options{
 		Get: func(key string) (interface{}, error) {

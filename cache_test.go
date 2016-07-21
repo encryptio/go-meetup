@@ -721,6 +721,32 @@ func TestStats(t *testing.T) {
 	}
 }
 
+func TestExpiryWithoutKeyReuseStillExpires(t *testing.T) {
+	t.Skip("Failing test tracked in issue #6")
+
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			return nil, nil
+		},
+		ExpireAge: time.Second,
+	})
+	defer c.Close()
+
+	for i := 0; i < 10000; i++ {
+		_, err := c.Get(strconv.Itoa(i))
+		if err != nil {
+			t.Error(err)
+			break
+		}
+		advanceTime(time.Second)
+	}
+
+	size := c.Stats().CurrentSize
+	if size > 1000 {
+		t.Errorf("Wanted size <= 1000, but got %v", size)
+	}
+}
+
 func BenchmarkGetCreateSerial(b *testing.B) {
 	c := New(Options{
 		Get: func(key string) (interface{}, error) {

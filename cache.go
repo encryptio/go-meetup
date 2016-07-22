@@ -138,19 +138,17 @@ type Stats struct {
 
 // Cache implements a meetup cache.
 type Cache struct {
+	t tomb.Tomb
+
 	o Options
 
 	concLimitCh chan struct{}
 
-	// mu protects tree, and its entries, evictAt, and totalSize.
 	mu        sync.Mutex
 	tree      *tree
 	evictAt   string
 	totalSize uint64
-
-	stats Stats
-
-	t tomb.Tomb
+	stats     Stats
 }
 
 type entry struct {

@@ -362,50 +362,7 @@ func (c *Cache) fill(key string, e *entry) {
 			c.tree.Delete(key)
 			c.totalSize -= e.Size
 		} else {
-			var (
-				k   string
-				v   *entry
-				err error = io.EOF
-			)
-			for c.totalSize > c.o.MaxSize {
-				if c.evictAt != nil {
-					k, v, err = c.evictAt.Next()
-				}
-				if err == io.EOF {
-					c.evictAt, err = c.tree.SeekFirst()
-					if err == io.EOF {
-						// Tree is empty. Shouldn't ever occur, but we can
-						// safely just bail out of the eviction loop.
-						break
-					}
-					continue
-				}
-
-				if v == e {
-					// Never attempt to evict ourselves
-					continue
-				}
-
-				if v.RecentlyUsed {
-					v.RecentlyUsed = false
-					continue
-				}
-
-				if v.Ready {
-					if v.Filling {
-						// We shouldn't evict keys that are filling by
-						// deleting them from the map; instead, we should
-						// keep them around but remove their data. This
-						// allows future Cache.Gets to meet up with the
-						// existing fill routine.
-						c.setEntryCleared(v)
-					} else {
-						c.tree.Delete(k)
-						c.totalSize -= v.Size
-					}
-					c.stats.Evictions++
-				}
-			}
+			c.evictCheck(e)
 		}
 	}
 
@@ -438,6 +395,54 @@ func (c *Cache) expireCheckStep(t time.Time) {
 				c.tree.Delete(k)
 				c.totalSize -= v.Size
 			}
+		}
+	}
+}
+
+func (c *Cache) evictCheck(invulnerableEntry *entry) {
+	var (
+		k   string
+		v   *entry
+		err error = io.EOF
+	)
+	for c.totalSize > c.o.MaxSize {
+		if c.evictAt != nil {
+			k, v, err = c.evictAt.Next()
+		}
+		if err == io.EOF {
+			c.evictAt, err = c.tree.SeekFirst()
+			if err == io.EOF {
+				// Tree is empty. Shouldn't ever occur, but we can
+				// safely just bail out of the eviction loop.
+				break
+			}
+			continue
+		}
+
+		if v == invulnerableEntry {
+			// Never attempt to evict the invulnerable entry that was just
+			// inserted.
+			continue
+		}
+
+		if v.RecentlyUsed {
+			v.RecentlyUsed = false
+			continue
+		}
+
+		if v.Ready {
+			if v.Filling {
+				// We shouldn't evict keys that are filling by
+				// deleting them from the map; instead, we should
+				// keep them around but remove their data. This
+				// allows future Cache.Gets to meet up with the
+				// existing fill routine.
+				c.setEntryCleared(v)
+			} else {
+				c.tree.Delete(k)
+				c.totalSize -= v.Size
+			}
+			c.stats.Evictions++
 		}
 	}
 }

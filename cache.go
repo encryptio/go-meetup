@@ -89,7 +89,9 @@ type Options struct {
 	// Once an entry's age reaches RevalidateAge, a background Options.Get will
 	// be made on its key, but Cache.Get will continue to return immediately. If
 	// the background Get returns an error, it will not be retried until
-	// ErrorAge has passed since the last revalidation attempt.
+	// ErrorAge has passed since the last revalidation attempt. During this
+	// process, the existing entry will continue to be returned from Cache.Get
+	// as long as it has not expired.
 	//
 	// If zero, revalidation is disabled.
 	RevalidateAge time.Duration
@@ -157,7 +159,8 @@ type entry struct {
 
 	Size uint64
 
-	LastUpdate time.Time
+	LastUpdate          time.Time
+	DontRevalidateUntil time.Time
 
 	// Value and Error are valid iff Ready is true
 	Value interface{}
@@ -197,6 +200,7 @@ func New(o Options) *Cache {
 func (c *Cache) setEntryValue(key string, e *entry, value interface{}, err error) {
 	e.Value = value
 	e.Error = err
+	e.DontRevalidateUntil = time.Time{}
 
 	newSize := uint64(1)
 	if c.o.ItemSize != nil {
@@ -262,7 +266,9 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		} else if e.Error != nil && (c.o.ErrorAge <= 0 || age >= c.o.ErrorAge) {
 			c.setEntryCleared(e)
 			c.startFill(key, e)
-		} else if c.o.RevalidateAge > 0 && age >= c.o.RevalidateAge {
+		} else if c.o.RevalidateAge > 0 && age >= c.o.RevalidateAge &&
+			(t.Equal(e.DontRevalidateUntil) || t.After(e.DontRevalidateUntil)) {
+
 			c.stats.Revalidations++
 			c.startFill(key, e)
 		}
@@ -330,13 +336,20 @@ func (c *Cache) fill(key string, e *entry) {
 
 	c.mu.Lock()
 
+	if !e.Ready || err == nil {
+		e.LastUpdate = t
+		c.setEntryValue(key, e, value, err)
+	}
+
+	if e.Ready && err != nil && c.o.ErrorAge > 0 {
+		e.DontRevalidateUntil = t.Add(c.o.ErrorAge)
+	}
+
+	e.Filling = false
+
 	if err != nil {
 		c.stats.Errors++
 	}
-
-	e.LastUpdate = t
-	e.Filling = false
-	c.setEntryValue(key, e, value, err)
 
 	if c.o.ExpireAge > 0 {
 		c.expireCheckStep(t)

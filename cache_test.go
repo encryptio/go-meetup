@@ -341,6 +341,97 @@ func TestRevalidation(t *testing.T) {
 	mustGet(t, c, "a", 2)
 }
 
+func TestRevalidationIgnoresErrors(t *testing.T) {
+	fillComplete = make(chan struct{})
+	defer func() { fillComplete = nil }()
+
+	deliberate := errors.New("deliberate failure")
+
+	var erroring uint32
+	var returnValue uint32
+
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			if atomic.LoadUint32(&erroring) == 0 {
+				return int(atomic.LoadUint32(&returnValue)), nil
+			} else {
+				return nil, deliberate
+			}
+		},
+		RevalidateAge: time.Second,
+	})
+	defer c.Close()
+
+	mustGet(t, c, "a", 0)
+	<-fillComplete
+	advanceTime(time.Second)
+	atomic.StoreUint32(&returnValue, 1)
+	mustGet(t, c, "a", 0)
+	<-fillComplete
+	mustGet(t, c, "a", 1)
+	atomic.StoreUint32(&returnValue, 2)
+	atomic.StoreUint32(&erroring, 1)
+	advanceTime(time.Second)
+	mustGet(t, c, "a", 1)
+	<-fillComplete
+	mustGet(t, c, "a", 1)
+	<-fillComplete
+	atomic.StoreUint32(&erroring, 0)
+	mustGet(t, c, "a", 1)
+	<-fillComplete
+	mustGet(t, c, "a", 2)
+	mustGet(t, c, "a", 2)
+}
+
+func TestRevalidationCachesErrors(t *testing.T) {
+	fillComplete = make(chan struct{})
+	defer func() { fillComplete = nil }()
+
+	deliberate := errors.New("deliberate failure")
+
+	var erroring uint32
+
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			if atomic.LoadUint32(&erroring) == 0 {
+				return 0, nil
+			} else {
+				return nil, deliberate
+			}
+		},
+		RevalidateAge: time.Second * 2,
+		ErrorAge:      time.Second,
+	})
+	defer c.Close()
+
+	mustGet(t, c, "a", 0)
+	<-fillComplete
+	advanceTime(time.Second)
+	mustGet(t, c, "a", 0)
+	mustGet(t, c, "a", 0)
+	atomic.StoreUint32(&erroring, 1)
+	advanceTime(time.Second)
+	mustGet(t, c, "a", 0)
+	<-fillComplete
+	mustGet(t, c, "a", 0)
+	mustGet(t, c, "a", 0)
+	advanceTime(time.Second)
+	mustGet(t, c, "a", 0)
+	<-fillComplete
+	mustGet(t, c, "a", 0)
+	mustGet(t, c, "a", 0)
+	advanceTime(time.Second)
+	mustGet(t, c, "a", 0)
+	<-fillComplete
+	mustGet(t, c, "a", 0)
+	mustGet(t, c, "a", 0)
+	atomic.StoreUint32(&erroring, 0)
+	advanceTime(time.Second)
+	mustGet(t, c, "a", 0)
+	<-fillComplete
+	mustGet(t, c, "a", 0)
+}
+
 func TestErrorCaching(t *testing.T) {
 	deliberate := errors.New("deliberate failure")
 

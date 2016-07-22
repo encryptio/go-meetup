@@ -722,8 +722,6 @@ func TestStats(t *testing.T) {
 }
 
 func TestExpiryWithoutKeyReuseStillExpires(t *testing.T) {
-	t.Skip("Failing test tracked in issue #6")
-
 	c := New(Options{
 		Get: func(key string) (interface{}, error) {
 			return nil, nil
@@ -739,11 +737,14 @@ func TestExpiryWithoutKeyReuseStillExpires(t *testing.T) {
 			break
 		}
 		advanceTime(time.Second)
+
+		c.validateTotalSize()
 	}
 
 	size := c.Stats().CurrentSize
-	if size > 1000 {
-		t.Errorf("Wanted size <= 1000, but got %v", size)
+	t.Logf("Size after 10000 Gets is %v", size)
+	if size > 100 {
+		t.Errorf("Wanted size <= 100, but got %v", size)
 	}
 }
 

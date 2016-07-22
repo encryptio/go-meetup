@@ -144,11 +144,12 @@ type Cache struct {
 
 	concLimitCh chan struct{}
 
-	mu        sync.Mutex
-	tree      *tree
-	evictAt   *enumerator
-	totalSize uint64
-	stats     Stats
+	mu            sync.Mutex
+	tree          *tree
+	evictAt       *enumerator
+	expireCheckAt *enumerator
+	totalSize     uint64
+	stats         Stats
 }
 
 type entry struct {
@@ -337,6 +338,10 @@ func (c *Cache) fill(key string, e *entry) {
 	e.Filling = false
 	c.setEntryValue(key, e, value, err)
 
+	if c.o.ExpireAge > 0 {
+		c.expireCheckStep(t)
+	}
+
 	if c.o.MaxSize > 0 {
 		if e.Size > c.o.MaxSize {
 			// Rather than evict our entire cache and STILL not have room for
@@ -344,10 +349,6 @@ func (c *Cache) fill(key string, e *entry) {
 			c.tree.Delete(key)
 			c.totalSize -= e.Size
 		} else {
-			// TODO: rather than evict items regardless, we can look for
-			// expired values first and evict them since they'll never be
-			// used.
-
 			var (
 				k   string
 				v   *entry
@@ -398,6 +399,36 @@ func (c *Cache) fill(key string, e *entry) {
 	c.mu.Unlock()
 }
 
+func (c *Cache) expireCheckStep(t time.Time) {
+	for i := 0; i < 2; i++ {
+		var (
+			k   string
+			v   *entry
+			err error = io.EOF
+		)
+		if c.expireCheckAt != nil {
+			k, v, err = c.expireCheckAt.Next()
+		}
+		if err == io.EOF {
+			c.expireCheckAt, err = c.tree.SeekFirst()
+			if err == io.EOF {
+				// Tree is empty
+				return
+			}
+			continue
+		}
+
+		if v.Ready && !v.Filling {
+			age := t.Sub(v.LastUpdate)
+			if age >= c.o.ExpireAge {
+				c.stats.Expires++
+				c.tree.Delete(k)
+				c.totalSize -= v.Size
+			}
+		}
+	}
+}
+
 // Close waits for all running Options.Get calls to finish and makes all future
 // Cache.Get calls return ErrClosed.
 func (c *Cache) Close() error {
@@ -408,10 +439,6 @@ func (c *Cache) Close() error {
 func (c *Cache) validateTotalSize() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if c.o.MaxSize <= 0 {
-		panic("validateTotalSize called when Options.MaxSize is not set (no sizes are being captured)")
-	}
 
 	size := uint64(0)
 	enum, err := c.tree.SeekFirst()

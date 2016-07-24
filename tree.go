@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	kx = 32 //TODO benchmark tune this number if using custom key/value type(s).
-	kd = 32 //TODO benchmark tune this number if using custom key/value type(s).
+	kx = 16
+	kd = 16
 )
 
 func init() {

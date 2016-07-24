@@ -613,6 +613,52 @@ func TestEvictionKeepsHotKeys(t *testing.T) {
 	}
 }
 
+func TestEvictionKeepsMeetup(t *testing.T) {
+	// Makes an entry evict while it is revalidating. The entry should still
+	// meet up with other gets in this case.
+
+	postGetCheckCh = make(chan struct{}, 1)
+	defer func() { postGetCheckCh = nil }()
+
+	var aHits uint64
+	blockA := newBoolWatcher(false)
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			if key == "a" {
+				atomic.AddUint64(&aHits, 1)
+				blockA.Wait(false)
+			}
+			return nil, nil
+		},
+		RevalidateAge: time.Second,
+		MaxSize:       1,
+	})
+
+	mustGet(t, c, "a", nil)
+	<-postGetCheckCh
+	atomicHitCheck(t, &aHits, 1)
+
+	advanceTime(time.Second)
+
+	blockA.Set(true)
+	mustGet(t, c, "a", nil) // starts revalidation but returns
+	<-postGetCheckCh
+	mustGet(t, c, "b", nil) // evicts value
+	<-postGetCheckCh
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mustGet(t, c, "a", nil)
+	}()
+	<-postGetCheckCh
+
+	blockA.Set(false)
+	<-done
+
+	atomicHitCheck(t, &aHits, 2)
+}
+
 func TestItemSize(t *testing.T) {
 	var hits uint64
 	c := New(Options{

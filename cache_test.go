@@ -2,6 +2,7 @@ package meetup
 
 import (
 	"errors"
+	"math/rand"
 	"reflect"
 	"strconv"
 	"sync"
@@ -1032,4 +1033,36 @@ func BenchmarkGetCreateLimitedSize8Parallel(b *testing.B) {
 	b.ResetTimer()
 	close(start)
 	wg.Wait()
+}
+
+func BenchmarkZipfLimited(b *testing.B) {
+	// A somewhat realistic probability distribution of keys.
+
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			return nil, nil
+		},
+		MaxSize: 10000,
+	})
+	defer c.Close()
+
+	const keyCount = 500000
+
+	rng := rand.New(rand.NewSource(4422))
+	z := rand.NewZipf(rng, 1.1, 7, keyCount-1)
+
+	keys := make([]string, keyCount)
+	for i := 0; i < len(keys); i++ {
+		// Randomized key space to spread out popular values; if popular values
+		// are clustered together, that uses less of the CPU cache for them and
+		// overestimates performance.
+		keys[i] = strconv.FormatInt(rng.Int63(), 16)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		val := z.Uint64()
+		c.Get(keys[int(val)])
+	}
+	b.StopTimer()
 }

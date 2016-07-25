@@ -146,6 +146,8 @@ type Cache struct {
 
 	concLimitCh chan struct{}
 
+	entryPool *sync.Pool
+
 	mu            sync.Mutex
 	tree          *tree
 	evictAt       *enumerator
@@ -166,6 +168,10 @@ type entry struct {
 	Value interface{}
 	Error error
 
+	// ReadersWaiting is a counter of the number of *Cache.Gets which have a
+	// pointer to this entry and intend to read its Value and Error fields.
+	ReadersWaiting uint32
+
 	// Filling is true iff a fill is running for this entry
 	Filling bool
 
@@ -184,6 +190,14 @@ func New(o Options) *Cache {
 		tree: treeNew(),
 	}
 
+	c.entryPool = &sync.Pool{
+		New: func() interface{} {
+			return &entry{
+				ReadyCond: sync.NewCond(&c.mu),
+			}
+		},
+	}
+
 	if o.Concurrency > 0 {
 		c.concLimitCh = make(chan struct{}, o.Concurrency)
 	}
@@ -195,6 +209,31 @@ func New(o Options) *Cache {
 	})
 
 	return c
+}
+
+func (c *Cache) doneWithEntry(e *entry) {
+	if e.Filling {
+		panic("cannot be done with an entry that is filling")
+	}
+
+	if e.ReadersWaiting != 0 {
+		// This entry will have its Value and Error fields read later; it must
+		// not be cleared before then. Therefore, we just drop it on the floor
+		// and let the GC handle it.
+		//
+		// Performance is still relatively good without entry pooling, so it's
+		// not terrible to create a little garbage.
+		return
+	}
+
+	// Zero all fields except ReadyCond
+	*e = entry{ReadyCond: e.ReadyCond}
+
+	c.entryPool.Put(e)
+}
+
+func (c *Cache) getNewEntry() *entry {
+	return c.entryPool.Get().(*entry)
 }
 
 func (c *Cache) setEntryValue(key string, e *entry, value interface{}, err error) {
@@ -251,13 +290,13 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		e.RecentlyUsed = true
 	} else {
 		// No entry for this key. Create the entry.
-		e = &entry{
-			ReadyCond: sync.NewCond(&c.mu),
-		}
+		e = c.getNewEntry()
 		fillInline = true
 		c.tree.Set(key, e)
 		c.stats.Misses++
 	}
+
+	e.ReadersWaiting++
 
 	if e.Ready {
 		age := t.Sub(e.LastUpdate)
@@ -300,6 +339,8 @@ func (c *Cache) Get(key string) (interface{}, error) {
 
 	value := e.Value
 	err := e.Error
+
+	e.ReadersWaiting--
 
 	c.mu.Unlock()
 
@@ -406,6 +447,7 @@ func (c *Cache) expireCheckStep(t time.Time) {
 				c.stats.Expires++
 				c.tree.Delete(k)
 				c.totalSize -= v.Size
+				c.doneWithEntry(v)
 			}
 		}
 	}
@@ -453,6 +495,7 @@ func (c *Cache) evictCheck(invulnerableEntry *entry) {
 			} else {
 				c.tree.Delete(k)
 				c.totalSize -= v.Size
+				c.doneWithEntry(v)
 			}
 			c.stats.Evictions++
 		}

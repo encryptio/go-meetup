@@ -352,11 +352,10 @@ func TestRevalidationIgnoresErrors(t *testing.T) {
 
 	c := New(Options{
 		Get: func(key string) (interface{}, error) {
-			if atomic.LoadUint32(&erroring) == 0 {
-				return int(atomic.LoadUint32(&returnValue)), nil
-			} else {
+			if atomic.LoadUint32(&erroring) == 1 {
 				return nil, deliberate
 			}
+			return int(atomic.LoadUint32(&returnValue)), nil
 		},
 		RevalidateAge: time.Second,
 	})
@@ -393,11 +392,10 @@ func TestRevalidationCachesErrors(t *testing.T) {
 
 	c := New(Options{
 		Get: func(key string) (interface{}, error) {
-			if atomic.LoadUint32(&erroring) == 0 {
-				return 0, nil
-			} else {
+			if atomic.LoadUint32(&erroring) == 1 {
 				return nil, deliberate
 			}
+			return 0, nil
 		},
 		RevalidateAge: time.Second * 2,
 		ErrorAge:      time.Second,

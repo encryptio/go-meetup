@@ -5,5 +5,5 @@ go:
   - 1.6
   - tip
 script:
-  - go test -v
-  - go test -v -race
+  - go test -v -bench=. -benchtime=100ms
+  - go test -v -bench=. -benchtime=100ms -race

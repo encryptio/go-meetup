@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+////////////////////////////////////////////////////////////////////////////////
+// Fake time implementation
+
 var (
 	fakeTimeMu sync.Mutex
 	fakeTime   = time.Now()
@@ -31,6 +34,48 @@ func advanceTime(d time.Duration) {
 	fakeTimeMu.Unlock()
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// boolwatcher
+
+type boolWatcher struct {
+	mu sync.Mutex
+	c  *sync.Cond
+	v  bool
+}
+
+func newBoolWatcher(value bool) *boolWatcher {
+	w := &boolWatcher{
+		v: value,
+	}
+	w.c = sync.NewCond(&w.mu)
+	return w
+}
+
+func (w *boolWatcher) Wait(value bool) {
+	w.mu.Lock()
+	for w.v != value {
+		w.c.Wait()
+	}
+	w.mu.Unlock()
+}
+
+func (w *boolWatcher) Set(value bool) {
+	w.mu.Lock()
+	w.v = value
+	w.c.Broadcast()
+	w.mu.Unlock()
+}
+
+func (w *boolWatcher) Get() bool {
+	w.mu.Lock()
+	v := w.v
+	w.mu.Unlock()
+	return v
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Utility functions
+
 func mustGet(t *testing.T, c *Cache, key string, want interface{}) {
 	v, err := c.Get(key)
 	if err != nil {
@@ -47,6 +92,9 @@ func atomicHitCheck(t *testing.T, value *uint64, expect uint64) {
 		t.Fatalf("hits = %v, but wanted %v", actual, expect)
 	}
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests
 
 func TestCache(t *testing.T) {
 	hits := 0
@@ -920,6 +968,9 @@ func TestExpiryWithoutKeyReuseStillExpires(t *testing.T) {
 		t.Errorf("Wanted size <= 100, but got %v", size)
 	}
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Benchmarks
 
 func BenchmarkGetCreateSerial(b *testing.B) {
 	c := New(Options{

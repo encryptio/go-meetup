@@ -264,10 +264,10 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		if c.o.ExpireAge > 0 && age >= c.o.ExpireAge {
 			c.stats.Expires++
 			c.setEntryCleared(e)
-			c.startFill(key, e)
+			fillInline = true
 		} else if e.Error != nil && (c.o.ErrorAge <= 0 || age >= c.o.ErrorAge) {
 			c.setEntryCleared(e)
-			c.startFill(key, e)
+			fillInline = true
 		} else if c.o.RevalidateAge > 0 && age >= c.o.RevalidateAge &&
 			(t.Equal(e.DontRevalidateUntil) || t.After(e.DontRevalidateUntil)) {
 
@@ -285,6 +285,9 @@ func (c *Cache) Get(key string) (interface{}, error) {
 	}
 
 	if fillInline {
+		if e.Ready || e.Filling {
+			panic("not reached")
+		}
 		e.Filling = true
 		c.mu.Unlock()
 		c.fill(key, e)

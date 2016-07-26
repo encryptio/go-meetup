@@ -285,7 +285,7 @@ func TestCacheDoesntKeepErrors(t *testing.T) {
 }
 
 func TestRevalidation(t *testing.T) {
-	fillComplete = make(chan struct{})
+	fillComplete = make(chan struct{}, 1)
 	defer func() { fillComplete = nil }()
 
 	blockGets := newBoolWatcher(false)
@@ -343,7 +343,7 @@ func TestRevalidation(t *testing.T) {
 }
 
 func TestRevalidationIgnoresErrors(t *testing.T) {
-	fillComplete = make(chan struct{})
+	fillComplete = make(chan struct{}, 1)
 	defer func() { fillComplete = nil }()
 
 	deliberate := errors.New("deliberate failure")
@@ -384,7 +384,7 @@ func TestRevalidationIgnoresErrors(t *testing.T) {
 }
 
 func TestRevalidationCachesErrors(t *testing.T) {
-	fillComplete = make(chan struct{})
+	fillComplete = make(chan struct{}, 1)
 	defer func() { fillComplete = nil }()
 
 	deliberate := errors.New("deliberate failure")
@@ -738,7 +738,7 @@ func TestItemSizeTooBig(t *testing.T) {
 }
 
 func TestItemSizeChanges(t *testing.T) {
-	fillComplete = make(chan struct{})
+	fillComplete = make(chan struct{}, 1)
 	defer func() { fillComplete = nil }()
 
 	var hits uint64

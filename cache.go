@@ -243,6 +243,8 @@ func (c *Cache) Get(key string) (interface{}, error) {
 
 	t := now()
 
+	fillInline := false
+
 	c.mu.Lock()
 	e, ok := c.tree.Get(key)
 	if ok {
@@ -252,7 +254,7 @@ func (c *Cache) Get(key string) (interface{}, error) {
 		e = &entry{
 			ReadyCond: sync.NewCond(&c.mu),
 		}
-		c.startFill(key, e)
+		fillInline = true
 		c.tree.Set(key, e)
 		c.stats.Misses++
 	}
@@ -280,6 +282,13 @@ func (c *Cache) Get(key string) (interface{}, error) {
 	// Used for the test suite.
 	if postGetCheckCh != nil {
 		postGetCheckCh <- struct{}{}
+	}
+
+	if fillInline {
+		e.Filling = true
+		c.mu.Unlock()
+		c.fill(key, e)
+		c.mu.Lock()
 	}
 
 	for !e.Ready {

@@ -502,8 +502,8 @@ func (c *Cache) evictCheck(invulnerableEntry *entry) {
 	}
 }
 
-// Close waits for all running Options.Get calls to finish and makes all future
-// Cache.Get calls return ErrClosed.
+// Close cleans up any helper goroutines and makes all future Cache.Get calls
+// return ErrClosed.
 func (c *Cache) Close() error {
 	c.t.Kill(nil)
 	return c.t.Wait()

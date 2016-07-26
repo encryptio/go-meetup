@@ -870,6 +870,29 @@ func TestStats(t *testing.T) {
 	}
 }
 
+func TestStatsOverMaxSize(t *testing.T) {
+	c := New(Options{
+		Get: func(key string) (interface{}, error) {
+			return nil, nil
+		},
+		MaxSize: 1,
+		ItemSize: func(key string, value interface{}) uint64 {
+			return 5
+		},
+	})
+	defer c.Close()
+
+	c.Get("a")
+
+	expectStats := Stats{
+		Misses:    1,
+		Evictions: 1,
+	}
+	if expectStats != c.Stats() {
+		t.Errorf("Wanted Stats() = %#v, but got %#v", expectStats, c.Stats())
+	}
+}
+
 func TestExpiryWithoutKeyReuseStillExpires(t *testing.T) {
 	c := New(Options{
 		Get: func(key string) (interface{}, error) {

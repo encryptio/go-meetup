@@ -414,6 +414,7 @@ func (c *Cache) fill(key string, e *entry) {
 			// this value, we just evict this value immediately.
 			c.tree.Delete(key)
 			c.totalSize -= e.Size
+			c.stats.Evictions++
 		} else {
 			c.evictCheck(e)
 		}

@@ -272,7 +272,7 @@ func (c *Cache) setEntryCleared(e *entry) {
 
 // Get retrieves an entry's value from the cache, calling Options.Get if needed
 // to fill the cache. If multiple concurrent Get calls occur on the same key,
-// all of them will recieve the return value of a single Options.Get call.
+// all of them will receive the return value of a single Options.Get call.
 func (c *Cache) Get(key string) (interface{}, error) {
 	select {
 	case <-c.t.Dying():

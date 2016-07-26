@@ -404,7 +404,7 @@ func (c *Cache) fill(key string, e *entry) {
 		c.stats.Errors++
 	}
 
-	if c.o.ExpireAge > 0 {
+	if c.o.ExpireAge > 0 || c.o.ErrorAge > 0 {
 		c.expireCheckStep(t)
 	}
 
@@ -443,7 +443,13 @@ func (c *Cache) expireCheckStep(t time.Time) {
 
 		if v.Ready && !v.Filling {
 			age := t.Sub(v.LastUpdate)
-			if age >= c.o.ExpireAge {
+			expired := false
+			if v.Error != nil && c.o.ErrorAge > 0 && age >= c.o.ErrorAge {
+				expired = true
+			} else if c.o.ExpireAge > 0 && age >= c.o.ExpireAge {
+				expired = true
+			}
+			if expired {
 				c.stats.Expires++
 				c.tree.Delete(k)
 				c.totalSize -= v.Size

@@ -69,29 +69,41 @@ var (
 // Options control the behavior of the Cache with respect to its backend.
 type Options struct {
 	// When a key is requested that does not exist in the cache (or needs to be
-	// revalidated) then Get will be called. Get is called concurrently, at most
-	// once concurrently per concurrent key requested.
+	// revalidated) then Get will be called for that key.
+	//
+	// If multiple concurrent Cache.Get calls mention the same key, they will be
+	// coalesced to a single Options.Get call and all Cache.Get callers will
+	// receive the same value and error return.
 	Get func(key string) (interface{}, error)
 
-	// If greater than zero, only Concurrency Get calls will be done
+	// If greater than zero, only Concurrency Options.Get calls will be done
 	// concurrently. Any other calls will wait until one of the running Get calls
 	// complete.
 	Concurrency int
 
-	// If an Options.Get returns an error, cache the error for this amount of
-	// time. If negative or zero, don't cache errors.
-	ErrorAge time.Duration
-
 	// Once an entry's age reaches ExpireAge, it is considered expired and the
-	// cached result will not be used. If set to zero, values do not expire.
+	// cached result will not be used.
+	//
+	// If set to zero, values do not expire.
 	ExpireAge time.Duration
+
+	// If an Options.Get returns an error, and ErrorAge is set, then the error
+	// will be saved in the cache for ErrorAge. Once that time passes, the error
+	// will expire and Options.Get will be retried.
+	//
+	// Note that it doesn't make sense to set ErrorAge and ExpireAge with
+	// ErrorAge > ExpireAge; error values will expire based on the overall
+	// expiration before ErrorAge can take effect.
+	ErrorAge time.Duration
 
 	// Once an entry's age reaches RevalidateAge, a background Options.Get will
 	// be made on its key, but Cache.Get will continue to return immediately. If
-	// the background Get returns an error, it will not be retried until
-	// ErrorAge has passed since the last revalidation attempt. During this
-	// process, the existing entry will continue to be returned from Cache.Get
-	// as long as it has not expired.
+	// the background Get returns an error, it will not be saved, and if
+	// ErrorAge is set, will not be retried until ErrorAge has passed since the
+	// last revalidation attempt.
+	//
+	// During this process, the existing entry will continue to be returned from
+	// Cache.Get as long as it has not expired.
 	//
 	// If zero, revalidation is disabled.
 	RevalidateAge time.Duration
@@ -106,6 +118,9 @@ type Options struct {
 	// ItemSize is called to figure out the size of a value to compare against
 	// MaxSize. If ItemSize is not set or returns a zero, the size of a value is
 	// assumed to be 1.
+	//
+	// If an item reports its size to be larger than MaxSize, then it is evicted
+	// immediately instead of the other entries in the cache.
 	ItemSize func(key string, value interface{}) uint64
 }
 
@@ -271,8 +286,7 @@ func (c *Cache) setEntryCleared(e *entry) {
 }
 
 // Get retrieves an entry's value from the cache, calling Options.Get if needed
-// to fill the cache. If multiple concurrent Get calls occur on the same key,
-// all of them will receive the return value of a single Options.Get call.
+// to fill the cache. Details on the semantics are documented on Options.
 func (c *Cache) Get(key string) (interface{}, error) {
 	select {
 	case <-c.t.Dying():

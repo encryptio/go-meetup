@@ -79,14 +79,11 @@ func TestCache(t *testing.T) {
 }
 
 func TestExpiry(t *testing.T) {
-	var mu sync.Mutex
 	hits := 0
 
 	c := New(Options{
 		Get: func(key string) (interface{}, error) {
-			mu.Lock()
 			hits++
-			mu.Unlock()
 			return key, nil
 		},
 		ExpireAge: time.Second,
@@ -94,29 +91,23 @@ func TestExpiry(t *testing.T) {
 	defer c.Close()
 
 	mustGet(t, c, "a", "a")
-	mu.Lock()
 	if hits != 1 {
 		t.Fatalf("hits = %v after first use", hits)
 	}
-	mu.Unlock()
 
 	advanceTime(2 * time.Second)
 
 	mustGet(t, c, "a", "a")
-	mu.Lock()
 	if hits != 2 {
 		t.Fatalf("hits != 2 after second use")
 	}
-	mu.Unlock()
 
 	advanceTime(time.Second / 2)
 
 	mustGet(t, c, "a", "a")
-	mu.Lock()
 	if hits != 2 {
 		t.Fatalf("hits = %v after third use", hits)
 	}
-	mu.Unlock()
 }
 
 func TestExpiryUsesStartTime(t *testing.T) {
@@ -271,6 +262,8 @@ func TestCacheDoesntKeepErrors(t *testing.T) {
 		t.Errorf("Got unexpected error %v from c.Get", err)
 	}
 
+	// NB: no time passes here
+
 	v, err = c.Get("a")
 	if v != nil {
 		t.Errorf("Got unexpected value %#v from c.Get", v)
@@ -362,21 +355,31 @@ func TestRevalidationIgnoresErrors(t *testing.T) {
 	})
 	defer c.Close()
 
+	// Original get works normally
 	mustGet(t, c, "a", 0)
 	<-fillComplete
+
 	advanceTime(time.Second)
 	atomic.StoreUint32(&returnValue, 1)
+
+	// Further gets are revalidated in the background
 	mustGet(t, c, "a", 0)
 	<-fillComplete
 	mustGet(t, c, "a", 1)
+
 	atomic.StoreUint32(&returnValue, 2)
 	atomic.StoreUint32(&erroring, 1)
 	advanceTime(time.Second)
+
+	// Errors are NOT returned but cause Options.Get to run repeatedly
 	mustGet(t, c, "a", 1)
 	<-fillComplete
 	mustGet(t, c, "a", 1)
 	<-fillComplete
+
 	atomic.StoreUint32(&erroring, 0)
+
+	// Finally, recovering causes caching to work again
 	mustGet(t, c, "a", 1)
 	<-fillComplete
 	mustGet(t, c, "a", 2)
@@ -403,31 +406,38 @@ func TestRevalidationCachesErrors(t *testing.T) {
 	})
 	defer c.Close()
 
+	// Original get works normally
 	mustGet(t, c, "a", 0)
 	<-fillComplete
-	advanceTime(time.Second)
-	mustGet(t, c, "a", 0)
-	mustGet(t, c, "a", 0)
+
 	atomic.StoreUint32(&erroring, 1)
+	advanceTime(time.Second * 2)
+
+	// Revalidation occurs
+	mustGet(t, c, "a", 0)
+	<-fillComplete
+	// But only once per ErrorAge
+	mustGet(t, c, "a", 0)
+	mustGet(t, c, "a", 0)
+
 	advanceTime(time.Second)
+
+	// Once per ErrorAge, not once per RevalidateAge
 	mustGet(t, c, "a", 0)
 	<-fillComplete
 	mustGet(t, c, "a", 0)
 	mustGet(t, c, "a", 0)
-	advanceTime(time.Second)
-	mustGet(t, c, "a", 0)
-	<-fillComplete
-	mustGet(t, c, "a", 0)
-	mustGet(t, c, "a", 0)
-	advanceTime(time.Second)
-	mustGet(t, c, "a", 0)
-	<-fillComplete
-	mustGet(t, c, "a", 0)
-	mustGet(t, c, "a", 0)
+
 	atomic.StoreUint32(&erroring, 0)
 	advanceTime(time.Second)
+
+	// After recovering, caches normally
 	mustGet(t, c, "a", 0)
 	<-fillComplete
+	mustGet(t, c, "a", 0)
+
+	advanceTime(time.Second)
+
 	mustGet(t, c, "a", 0)
 }
 
@@ -597,14 +607,19 @@ func TestEvictionKeepsHotKeys(t *testing.T) {
 	})
 	defer c.Close()
 
+	// Pre-cache the "hot" item
 	mustGet(t, c, "hot", nil)
 	atomicHitCheck(t, &hits, 1)
 
 	for loop := 0; loop < 2; loop++ {
 		for i := 1; i <= 100; i++ {
+			// One half of requests are scanning the keyspace
 			mustGet(t, c, strconv.FormatInt(int64(i), 10), nil)
 			expectedHits := uint64(i + 1 + loop*100)
 			atomicHitCheck(t, &hits, expectedHits)
+
+			// And one half is just spamming the "hot" key, which should stay
+			// cached
 			mustGet(t, c, "hot", nil)
 			atomicHitCheck(t, &hits, expectedHits)
 			c.validateTotalSize()
@@ -709,9 +724,7 @@ func TestItemSizeTooBig(t *testing.T) {
 	})
 	defer c.Close()
 
-	c.validateTotalSize()
-	atomicHitCheck(t, &hits, 0)
-
+	// Fill the cache to its max size
 	mustGet(t, c, "a", nil)
 	c.validateTotalSize()
 	atomicHitCheck(t, &hits, 1)
@@ -720,21 +733,21 @@ func TestItemSizeTooBig(t *testing.T) {
 	c.validateTotalSize()
 	atomicHitCheck(t, &hits, 2)
 
+	// "big" items should not be cached
 	mustGet(t, c, "big", nil)
-	c.validateTotalSize()
 	atomicHitCheck(t, &hits, 3)
+	c.validateTotalSize()
 
 	mustGet(t, c, "big", nil)
-	c.validateTotalSize()
 	atomicHitCheck(t, &hits, 4)
+	c.validateTotalSize()
 
+	// Other items were NOT evicted from the cache
 	mustGet(t, c, "a", nil)
-	c.validateTotalSize()
 	atomicHitCheck(t, &hits, 4)
-
 	mustGet(t, c, "b", nil)
-	c.validateTotalSize()
 	atomicHitCheck(t, &hits, 4)
+	c.validateTotalSize()
 }
 
 func TestItemSizeChanges(t *testing.T) {
@@ -863,6 +876,7 @@ func TestExpiryWithoutKeyReuseStillExpires(t *testing.T) {
 			return nil, nil
 		},
 		ExpireAge: time.Second,
+		// NB: no MaxSize limit
 	})
 	defer c.Close()
 

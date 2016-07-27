@@ -67,6 +67,9 @@ var (
 )
 
 // Options control the behavior of the Cache with respect to its backend.
+//
+// All ages are relative to when the Options.Get call starts, not when it
+// finishes.
 type Options struct {
 	// When a key is requested that does not exist in the cache (or needs to be
 	// revalidated) then Get will be called for that key.

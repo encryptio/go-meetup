@@ -1150,7 +1150,10 @@ func BenchmarkZipfLimited(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		val := z.Uint64()
-		c.Get(keys[int(val)])
+		_, err := c.Get(keys[int(val)])
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 	b.StopTimer()
 }
